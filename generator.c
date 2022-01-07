@@ -5,11 +5,6 @@
 #define array_count(array) (sizeof(array) / sizeof((array)[0]))
 #define zero_struct(s) (memset(&s, 0, sizeof(s)))
 
-// TODO(alexander): special asserts
-#define assert_enum(T, v) assert((v) > 0 && (v) < T##_Count && "enum value out of range")
-#define assert_power_of_two(x) assert((((x) & ((x) - 1)) == 0) && "x is not power of two")
-
-
 typedef int bool;
 #define true 1
 #define false 0
