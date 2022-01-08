@@ -60,7 +60,7 @@ typedef struct {
     char symbol;
     int number;
     bool whitespace;
-    bool newline;
+    bool new_line;
 } Token;
 
 typedef struct {
@@ -86,7 +86,7 @@ is_whitespace(char c) {
 }
 
 inline bool
-is_whitespace_no_newline(char c) {
+is_whitespace_no_new_line(char c) {
     return c == ' ' || c == '\t' || c == '\v' || c == '\f';
 }
 
@@ -130,11 +130,11 @@ next_token(Tokenizer* t) {
         }
     } else if (is_end_of_line(c)) {
         if (c == '\r' && *t->curr == '\n') t->curr++; // crlf
-        result.newline = true;
+        result.new_line = true;
         result.whitespace = true;
-    } else if (is_whitespace_no_newline(c)) {
+    } else if (is_whitespace_no_new_line(c)) {
         result.whitespace = true;
-        while (t->curr < t->end && is_whitespace_no_newline(*t->curr)) {
+        while (t->curr < t->end && is_whitespace_no_new_line(*t->curr)) {
             t->curr++;
         }
     } else if (is_digit(c)) {
@@ -337,11 +337,11 @@ arena_push_dom_node(Memory_Arena* arena, Dom_Node* parent_node) {
     return node;
 }
 
+// NOTE(Alexander): parses a chain of nodes, returns the last node
 Dom_Node*
-parse_markdown_text(Tokenizer* t, Memory_Arena* arena, Token token)  {
+parse_markdown_text_line(Tokenizer* t, Memory_Arena* arena, Token token)  {
     Dom_Node* result = arena_push_dom_node(arena, 0);
     Dom_Node* node = result;
-    
     node->type = Dom_Inline_Text;
     node->text.data = token.text.data;
     node->text.count = 0;
@@ -351,10 +351,10 @@ parse_markdown_text(Tokenizer* t, Memory_Arena* arena, Token token)  {
             break;
         }
         
-        if (token.newline) {
+        if (token.new_line) {
             token = peek_token(t);
             
-            if (token.newline) {
+            if (token.new_line) {
                 break;
             }
             
@@ -415,10 +415,16 @@ parse_markdown_line(Tokenizer* t, Memory_Arena* arena) {
         break;
     }
     
-    if (token.symbol == '#' && peek_token(t).whitespace) {
+    int indent = 0;
+    if (token.whitespace) {
+        indent = (int) token.text.count; // NOTE(Alexander): tabs count as one indentation unit
+        token = next_token(t);
+    }
+    
+    if (indent == 0 && token.symbol == '#' && peek_token(t).whitespace) {
         Token begin = next_token(t);
         Token end = begin;
-        while (!end.newline) {
+        while (!end.new_line) {
             end = next_token(t);
         }
         
@@ -429,6 +435,7 @@ parse_markdown_line(Tokenizer* t, Memory_Arena* arena) {
         
     } else if (token.symbol == '*' && peek_token(t).whitespace) {
         node->type = Dom_Unordered_List;
+        //node->unordered_list
         //node->unordered_list.first_item = 
         
     } else if (token.symbol == '`' && token.text.count == 3) {
@@ -439,7 +446,7 @@ parse_markdown_line(Tokenizer* t, Memory_Arena* arena) {
         
     } else {
         node->type = Dom_Paragraph;
-        node->paragraph.first_node = parse_markdown_text(t, arena, token);
+        node->paragraph.first_node = parse_markdown_text_line(t, arena, token);
     }
     
     return node;

@@ -28,7 +28,7 @@ commands = {
    .mac = "./build.sh",
   },
  .run = { .out = "*run*", .footer_panel = false, .save_dirty_files = false,
-   .win = "build\\generator.exe hello_world.md",
+   .win = "build\\generator.exe",
    .linux = "build/generator",
    .mac = "build/generator",
   }
