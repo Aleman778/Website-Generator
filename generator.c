@@ -1,6 +1,5 @@
 #include "stdio.h"
 #include "stdlib.h"
-#include "stdalign.h"
 
 #define array_count(array) (sizeof(array) / sizeof((array)[0]))
 #define zero_struct(s) (memset(&s, 0, sizeof(s)))
@@ -87,6 +86,11 @@ is_whitespace(char c) {
 }
 
 inline bool
+is_whitespace_no_newline(char c) {
+    return c == ' ' || c == '\t' || c == '\v' || c == '\f';
+}
+
+inline bool
 is_special_character(char c) {
     return c == '*' 
         || c == '#' 
@@ -121,15 +125,16 @@ next_token(Tokenizer* t) {
     
     char c = *t->curr++;
     if (is_special_character(c)) {
-        while (*t->curr == c) {
+        while (t->curr < t->end && *t->curr == c) {
             t->curr++;
         }
     } else if (is_end_of_line(c)) {
         if (c == '\r' && *t->curr == '\n') t->curr++; // crlf
         result.newline = true;
-    } else if (is_whitespace(c)) {
         result.whitespace = true;
-        while (t->curr < t->end && is_whitespace(*t->curr) && !is_end_of_line(c)) {
+    } else if (is_whitespace_no_newline(c)) {
+        result.whitespace = true;
+        while (t->curr < t->end && is_whitespace_no_newline(*t->curr)) {
             t->curr++;
         }
     } else if (is_digit(c)) {
@@ -164,6 +169,7 @@ typedef enum {
 
 typedef enum {
     Dom_None,
+    Dom_Line_Break,
     Dom_Inline_Text,
     Dom_Paragraph,
     Dom_Heading,
@@ -314,10 +320,26 @@ arena_push_cstring(Memory_Arena* arena, const char* data) {
     memcpy(ptr, data, count);
 }
 
+void
+arena_push_new_line(Memory_Arena* arena, int trailing_spaces) {
+    char* buf = (char*) arena_push_size(arena, trailing_spaces + 1, 1);
+    *buf++ = '\n';
+    for (int i = 0; i < trailing_spaces; i++) *buf++ = ' ';
+}
+
+inline Dom_Node*
+arena_push_dom_node(Memory_Arena* arena, Dom_Node* parent_node) {
+    Dom_Node* node = arena_push_struct(arena, Dom_Node);
+    if (parent_node) {
+        node->text_style = parent_node->text_style;
+        parent_node->next = node;
+    }
+    return node;
+}
 
 Dom_Node*
 parse_markdown_text(Tokenizer* t, Memory_Arena* arena, Token token)  {
-    Dom_Node* result = arena_push_struct(arena, Dom_Node);
+    Dom_Node* result = arena_push_dom_node(arena, 0);
     Dom_Node* node = result;
     
     node->type = Dom_Inline_Text;
@@ -330,21 +352,28 @@ parse_markdown_text(Tokenizer* t, Memory_Arena* arena, Token token)  {
         }
         
         if (token.newline) {
-            node->text.count += token.text.count;
-            token = next_token(t);
+            token = peek_token(t);
             
             if (token.newline) {
                 break;
             }
+            
+            // NOTE(Alexander): push line break
+            node = arena_push_dom_node(arena, node);
+            node->type = Dom_Line_Break;
+            
+            // NOTE(Alexander): next node
+            token = next_token(t);
+            node = arena_push_dom_node(arena, node);
+            node->type = Dom_Inline_Text;
+            node->text.data = token.text.data;
+            node->text.count = 0;
         }
         
         if (token.symbol == '*' || token.symbol == '`') {
-            Dom_Node* next_node = arena_push_struct(arena, Dom_Node);
-            next_node->text_style = node->text_style;
-            node->next = next_node;
-            node = next_node;
-            
+            node = arena_push_dom_node(arena, node);
             node->type = Dom_Inline_Text;
+            
             if (token.symbol == '*') {
                 if (token.text.count == 1 || token.text.count > 2) {
                     node->text_style ^= TextStyle_Italics;
@@ -359,15 +388,6 @@ parse_markdown_text(Tokenizer* t, Memory_Arena* arena, Token token)  {
             token = next_token(t);
             node->text.data = token.text.data;
             node->text.count = 0;
-            
-        } else if (token.symbol == '`') {
-            Dom_Node* next_node = arena_push_struct(arena, Dom_Node);
-            next_node->text_style = node->text_style;
-            node->next = next_node;
-            node = next_node;
-            
-            node->type = Dom_Inline_Text;
-            
         }
         
         node->text.count += token.text.count;
@@ -382,8 +402,17 @@ parse_markdown_line(Tokenizer* t, Memory_Arena* arena) {
     Dom_Node* node = arena_push_struct(arena, Dom_Node);
     
     Token token = next_token(t);
-    if (!token.symbol) {
-        return node;
+    for (;;) {
+        if (!token.symbol) {
+            return node;
+        }
+        
+        if (token.whitespace) {
+            token = next_token(t);
+            continue;
+        }
+        
+        break;
     }
     
     if (token.symbol == '#' && peek_token(t).whitespace) {
@@ -400,7 +429,7 @@ parse_markdown_line(Tokenizer* t, Memory_Arena* arena) {
         
     } else if (token.symbol == '*' && peek_token(t).whitespace) {
         node->type = Dom_Unordered_List;
-        //node->unordered_list.first_item
+        //node->unordered_list.first_item = 
         
     } else if (token.symbol == '`' && token.text.count == 3) {
         node->type = Dom_Code_Block;
@@ -438,7 +467,7 @@ read_markdown_file(const char* filename) {
     while (true) {
         Dom_Node* next_node = parse_markdown_line(t, &dom_arena);
         if (next_node->type == Dom_None) {
-            return result;
+            break;
         }
         
         curr_node->next = next_node;
@@ -450,26 +479,33 @@ read_markdown_file(const char* filename) {
 }
 
 void
-push_generated_html_from_dom_node(Memory_Arena* arena, Dom_Node* node) {
+push_generated_html_from_dom_node(Memory_Arena* arena, Dom_Node* node, int depth) {
     while (node) {
         switch (node->type) {
             case Dom_Heading: {
                 if (node->heading.level > 6) node->heading.level = 6;
                 char level = '0' + (char) node->heading.level;
                 char* open = "<h0>";
-                char* close = "</h0>\n";
+                char* close = "</h0>";
                 *(open + 2) = level;
                 *(close + 3) = level;
                 
                 arena_push_cstring(arena, open);
                 arena_push_string(arena, node->text);
                 arena_push_cstring(arena, close);
+                arena_push_new_line(arena, depth);
             } break;
             
             case Dom_Paragraph: {
-                arena_push_cstring(arena, "<p>\n");
-                push_generated_html_from_dom_node(arena, node->paragraph.first_node);
-                arena_push_cstring(arena, "<\\p>\n");
+                arena_push_cstring(arena, "<p>");
+                push_generated_html_from_dom_node(arena, node->paragraph.first_node, depth);
+                arena_push_cstring(arena, "</p>");
+                arena_push_new_line(arena, depth);
+            } break;
+            
+            case Dom_Line_Break: {
+                arena_push_cstring(arena, "<br>");
+                arena_push_new_line(arena, depth);
             } break;
             
             case Dom_Inline_Text: {
@@ -508,7 +544,7 @@ generate_html_from_dom(Dom* dom) {
     zero_struct(html_buffer);
     
     Dom_Node* node = dom->root;
-    push_generated_html_from_dom_node(&html_buffer, node);
+    push_generated_html_from_dom_node(&html_buffer, node, 0);
     
     // Convert html buffer to string
     Memory_Block_Header* header = (Memory_Block_Header*) html_buffer.base;
@@ -537,4 +573,3 @@ generate_html_from_dom(Dom* dom) {
     
     return result;
 }
-
