@@ -21,6 +21,20 @@ test *This is italic*, **this is bold** and `this is code`.
   * Item 3b
     newline
 
+- Item 1
+- Item 2
+- Item 3
+  - Item 3a
+  - Item 3b
+    newline
+
++ Item 1
++ Item 2
++ Item 3
+  + Item 3a
+  + Item 3b
+    newline
+
 ### Ordered List
 1. Item 1
 2. Item 2

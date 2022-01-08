@@ -97,6 +97,7 @@ is_special_character(char c) {
         || c == '`'
         || c == '.'
         || c == '_'
+        || c == '+'
         || c == '-'
         || c == '[' 
         || c == ']'
@@ -175,6 +176,7 @@ typedef enum {
     Dom_Heading,
     Dom_Unordered_List,
     Dom_Ordered_List,
+    Dom_List_Item,
     Dom_Link,
     Dom_Date,
     Dom_Code_Block,
@@ -213,6 +215,10 @@ struct Dom_Node {
         struct {
             Dom_Node* second_item;
         } ordered_list;
+        
+        struct {
+            Dom_Node* first_node;
+        } list_item;
         
         struct {
             string source;
@@ -358,6 +364,20 @@ parse_markdown_text_line(Tokenizer* t, Memory_Arena* arena, Token token)  {
                 break;
             }
             
+            {
+                // TODO(Alexander): hackish exceptions avoid merging limes
+                Tokenizer backup = *t;
+                token = next_token(&backup);
+                if (token.whitespace) {
+                    token = next_token(&backup);
+                }
+                if (peek_token(&backup).whitespace && (token.symbol == '*' || 
+                                                       token.symbol == '+' ||
+                                                       token.symbol == '-')) {
+                    break;
+                }
+            }
+            
             // NOTE(Alexander): push line break
             node = arena_push_dom_node(arena, node);
             node->type = Dom_Line_Break;
@@ -398,6 +418,55 @@ parse_markdown_text_line(Tokenizer* t, Memory_Arena* arena, Token token)  {
 }
 
 Dom_Node*
+parse_markdown_unordered_list(Tokenizer* t, Memory_Arena* arena, char line_char, int curr_indent) {
+    Dom_Node* result = arena_push_dom_node(arena, 0);
+    Dom_Node* node = result;
+    node->type = Dom_List_Item;
+    node->list_item.first_node = parse_markdown_text_line(t, arena, next_token(t));
+    
+    node = arena_push_dom_node(arena, node);
+    
+    for (;;) {
+        Token token = peek_token(t);
+        if (token.new_line) {
+            break;
+        }
+        
+        int indent = curr_indent;
+        if (token.whitespace) {
+            indent = (int) token.text.count; // TODO(Alexander): tabs counts as 1 unit
+            next_token(t);
+            token = peek_token(t);
+        }
+        
+        if (token.symbol != line_char) {
+            break;
+        }
+        
+        if (indent < curr_indent) {
+            break;
+        } else if (indent > curr_indent) {
+            next_token(t);
+            node = arena_push_dom_node(arena, node);
+            node->type = Dom_Unordered_List;
+            node->unordered_list.first_item = parse_markdown_unordered_list(t, arena, token.symbol, indent);
+            
+            token = peek_token(t);
+            if (token.symbol != line_char) {
+                break;
+            }
+        }
+        
+        next_token(t);
+        node = arena_push_dom_node(arena, node);
+        node->type = Dom_List_Item;
+        node->list_item.first_node = parse_markdown_text_line(t, arena, next_token(t));
+    }
+    
+    return result;
+}
+
+Dom_Node*
 parse_markdown_line(Tokenizer* t, Memory_Arena* arena) {
     Dom_Node* node = arena_push_struct(arena, Dom_Node);
     
@@ -417,7 +486,7 @@ parse_markdown_line(Tokenizer* t, Memory_Arena* arena) {
     
     int indent = 0;
     if (token.whitespace) {
-        indent = (int) token.text.count; // NOTE(Alexander): tabs count as one indentation unit
+        indent = (int) token.text.count; // TODO(Alexander): tabs count as one indentation unit
         token = next_token(t);
     }
     
@@ -433,16 +502,19 @@ parse_markdown_line(Tokenizer* t, Memory_Arena* arena) {
         node->text.count = (size_t) (end.text.data - begin.text.data) - end.text.count;
         node->heading.level = (int) token.text.count;
         
-    } else if (token.symbol == '*' && peek_token(t).whitespace) {
+    } else if ((token.symbol == '*' ||
+                token.symbol == '+' ||
+                token.symbol == '-') && peek_token(t).whitespace) {
+        next_token(t);
+        
         node->type = Dom_Unordered_List;
-        //node->unordered_list
-        //node->unordered_list.first_item = 
+        node->unordered_list.first_item = parse_markdown_unordered_list(t, arena, token.symbol, indent);
+        
+    } else if (token.number >= 0 && peek_token(t).symbol == '.') {
+        node->type = Dom_Ordered_List;
         
     } else if (token.symbol == '`' && token.text.count == 3) {
         node->type = Dom_Code_Block;
-        
-    } else if (token.number >= 0 && peek_token(t).symbol == '.') {
-        node->type = Dom_Unordered_List;
         
     } else {
         node->type = Dom_Paragraph;
@@ -505,8 +577,25 @@ push_generated_html_from_dom_node(Memory_Arena* arena, Dom_Node* node, int depth
             
             case Dom_Paragraph: {
                 arena_push_cstring(arena, "<p>");
-                push_generated_html_from_dom_node(arena, node->paragraph.first_node, depth);
+                arena_push_new_line(arena, depth);
+                push_generated_html_from_dom_node(arena, node->paragraph.first_node, depth + 2);
                 arena_push_cstring(arena, "</p>");
+                arena_push_new_line(arena, depth);
+            } break;
+            
+            case Dom_Unordered_List: {
+                arena_push_cstring(arena, "<ul>");
+                arena_push_new_line(arena, depth);
+                push_generated_html_from_dom_node(arena, node->unordered_list.first_item, depth + 2);
+                arena_push_cstring(arena, "</ul>");
+                arena_push_new_line(arena, depth);
+            } break;
+            
+            case Dom_List_Item: {
+                arena_push_cstring(arena, "<li>");
+                arena_push_new_line(arena, depth);
+                push_generated_html_from_dom_node(arena, node->list_item.first_node, depth + 2);
+                arena_push_cstring(arena, "</li>");
                 arena_push_new_line(arena, depth);
             } break;
             
