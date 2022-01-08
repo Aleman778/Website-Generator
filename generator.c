@@ -60,6 +60,7 @@ typedef struct {
     string text;
     char symbol;
     int number;
+    bool whitespace;
     bool newline;
 } Token;
 
@@ -85,6 +86,24 @@ is_whitespace(char c) {
     return c == ' ' || c == '\t' || c == '\v' || c == '\f' || is_end_of_line(c);
 }
 
+inline bool
+is_special_character(char c) {
+    return c == '*' 
+        || c == '#' 
+        || c == '`'
+        || c == '.'
+        || c == '_'
+        || c == '-'
+        || c == '[' 
+        || c == ']'
+        || c == '('
+        || c == ')'
+        || c == '{'
+        || c == '}'
+        || c == '<'
+        || c == '>';
+}
+
 Token
 next_token(Tokenizer* t) {
     Token result;
@@ -95,24 +114,23 @@ next_token(Tokenizer* t) {
         return result;
     }
     
+    zero_struct(result);
     result.number = -1;
     result.symbol = *t->curr;
     result.text.data = t->curr;
-    result.text.count = 0;
-    result.newline = 0;
     
     char c = *t->curr++;
-    if (is_whitespace(c)) {
-        if (is_end_of_line(c)) {
-            result.newline = true;
-        } else {
-            while (t->curr < t->end && is_whitespace(*t->curr)) {
-                if (is_end_of_line(c)) {
-                    result.newline = true;
-                    break;
-                }
-                t->curr++;
-            }
+    if (is_special_character(c)) {
+        while (*t->curr == c) {
+            t->curr++;
+        }
+    } else if (is_end_of_line(c)) {
+        if (c == '\r' && *t->curr == '\n') t->curr++; // crlf
+        result.newline = true;
+    } else if (is_whitespace(c)) {
+        result.whitespace = true;
+        while (t->curr < t->end && is_whitespace(*t->curr) && !is_end_of_line(c)) {
+            t->curr++;
         }
     } else if (is_digit(c)) {
         result.number = c - '0';
@@ -121,7 +139,7 @@ next_token(Tokenizer* t) {
             result.number = result.number * 10 + c - '0';
         }
     } else {
-        while (t->curr < t->end && !is_whitespace(*t->curr)) {
+        while (t->curr < t->end && !is_whitespace(*t->curr) && !is_special_character(*t->curr)) {
             t->curr++;
         }
     }
@@ -149,6 +167,8 @@ typedef enum {
     Dom_Inline_Text,
     Dom_Paragraph,
     Dom_Heading,
+    Dom_Unordered_List,
+    Dom_Ordered_List,
     Dom_Link,
     Dom_Date,
     Dom_Code_Block,
@@ -173,7 +193,7 @@ struct Dom_Node {
     
     union {
         struct {
-            Dom_Node* first_item;
+            Dom_Node* first_node;
         } paragraph;
         
         struct {
@@ -213,6 +233,8 @@ typedef struct Memory_Block_Header Memory_Block_Header;
 struct Memory_Block_Header {
     Memory_Block_Header* prev;
     Memory_Block_Header* next;
+    
+    // NOTE(Alexander): sizes included the header
     size_t size;
     size_t size_used;
 };
@@ -238,8 +260,7 @@ align_forward(size_t address, size_t align) {
 }
 
 void*
-arena_push_size(Memory_Arena* arena, size_t size) {
-    const size_t align = 16; // TODO(Alexander): hard coded alignment
+arena_push_size(Memory_Arena* arena, size_t size, size_t align) {
     size_t current = (size_t) (arena->base + arena->curr_used);
     size_t offset = align_forward(current, align) - (size_t) arena->base;
     
@@ -250,6 +271,7 @@ arena_push_size(Memory_Arena* arena, size_t size) {
         
         void* block = calloc(1, arena->min_block_size);
         Memory_Block_Header* header = (Memory_Block_Header*) block;
+        header->size = arena->min_block_size;
         
         if (arena->base) {
             Memory_Block_Header* prev_header = (Memory_Block_Header*) block;
@@ -271,11 +293,128 @@ arena_push_size(Memory_Arena* arena, size_t size) {
     arena->prev_used = arena->curr_used;
     arena->curr_used = offset + size;
     
+    Memory_Block_Header* header = (Memory_Block_Header*) arena->base;
+    header->size_used = offset + size;
+    
     return result;
 }
 
-#define arena_push_struct(arena, type) (type*) arena_push_size(arena, sizeof(type))
+#define arena_push_struct(arena, type) (type*) arena_push_size(arena, sizeof(type), 16)
 
+inline void
+arena_push_string(Memory_Arena* arena, string str) {
+    void* ptr = arena_push_size(arena, str.count, 1);
+    memcpy(ptr, str.data, str.count);
+}
+
+inline void
+arena_push_cstring(Memory_Arena* arena, const char* data) {
+    size_t count = strlen(data);
+    void* ptr = arena_push_size(arena, count, 1);
+    memcpy(ptr, data, count);
+}
+
+
+Dom_Node*
+parse_markdown_text(Tokenizer* t, Memory_Arena* arena, Token token)  {
+    Dom_Node* result = arena_push_struct(arena, Dom_Node);
+    Dom_Node* node = result;
+    
+    node->type = Dom_Inline_Text;
+    node->text.data = token.text.data;
+    node->text.count = 0;
+    
+    for (;;) {
+        if (!token.symbol) {
+            break;
+        }
+        
+        if (token.newline) {
+            node->text.count += token.text.count;
+            token = next_token(t);
+            
+            if (token.newline) {
+                break;
+            }
+        }
+        
+        if (token.symbol == '*' || token.symbol == '`') {
+            Dom_Node* next_node = arena_push_struct(arena, Dom_Node);
+            next_node->text_style = node->text_style;
+            node->next = next_node;
+            node = next_node;
+            
+            node->type = Dom_Inline_Text;
+            if (token.symbol == '*') {
+                if (token.text.count == 1 || token.text.count > 2) {
+                    node->text_style ^= TextStyle_Italics;
+                }
+                if (token.text.count >= 2) {
+                    node->text_style ^= TextStyle_Bold;
+                }
+            } else {
+                node->text_style ^= TextStyle_Code;
+            }
+            
+            token = next_token(t);
+            node->text.data = token.text.data;
+            node->text.count = 0;
+            
+        } else if (token.symbol == '`') {
+            Dom_Node* next_node = arena_push_struct(arena, Dom_Node);
+            next_node->text_style = node->text_style;
+            node->next = next_node;
+            node = next_node;
+            
+            node->type = Dom_Inline_Text;
+            
+        }
+        
+        node->text.count += token.text.count;
+        token = next_token(t);
+    }
+    
+    return result;
+}
+
+Dom_Node*
+parse_markdown_line(Tokenizer* t, Memory_Arena* arena) {
+    Dom_Node* node = arena_push_struct(arena, Dom_Node);
+    
+    Token token = next_token(t);
+    if (!token.symbol) {
+        return node;
+    }
+    
+    if (token.symbol == '#' && peek_token(t).whitespace) {
+        Token begin = next_token(t);
+        Token end = begin;
+        while (!end.newline) {
+            end = next_token(t);
+        }
+        
+        node->type = Dom_Heading;
+        node->text.data = begin.text.data + begin.text.count;
+        node->text.count = (size_t) (end.text.data - begin.text.data) - end.text.count;
+        node->heading.level = (int) token.text.count;
+        
+    } else if (token.symbol == '*' && peek_token(t).whitespace) {
+        node->type = Dom_Unordered_List;
+        //node->unordered_list.first_item
+        
+    } else if (token.symbol == '`' && token.text.count == 3) {
+        node->type = Dom_Code_Block;
+        
+    } else if (token.number >= 0 && peek_token(t).symbol == '.') {
+        node->type = Dom_Unordered_List;
+        
+    } else {
+        node->type = Dom_Paragraph;
+        node->paragraph.first_node = parse_markdown_text(t, arena, token);
+    }
+    
+    return node;
+}
 
 Dom
 read_markdown_file(const char* filename) {
@@ -295,42 +434,107 @@ read_markdown_file(const char* filename) {
     zero_struct(dom_arena);
     
     result.root = arena_push_struct(&dom_arena, Dom_Node);
-    
-    size_t x = sizeof(Dom_Node);
-    
+    Dom_Node* curr_node = result.root;
     while (true) {
-        Token token = next_token(t);
-        if (!token.symbol) {
-            break;
+        Dom_Node* next_node = parse_markdown_line(t, &dom_arena);
+        if (next_node->type == Dom_None) {
+            return result;
         }
         
-        if (token.symbol == '#') {
-            printf("h%d\n", (int) token.text.count);
-        }
-        
-        if (token.symbol == '*') {
-            printf("unordered_list\n");
-        }
-        
-        if (token.number >= 0) {
-            printf("ordered_list\n");
-        }
+        curr_node->next = next_node;
+        curr_node = next_node;
     }
+    
     
     return result;
 }
 
-int
-main(int argc, char* argv[]) {
-    if (argc < 2) {
-        return;
+void
+push_generated_html_from_dom_node(Memory_Arena* arena, Dom_Node* node) {
+    while (node) {
+        switch (node->type) {
+            case Dom_Heading: {
+                if (node->heading.level > 6) node->heading.level = 6;
+                char level = '0' + (char) node->heading.level;
+                char* open = "<h0>";
+                char* close = "</h0>\n";
+                *(open + 2) = level;
+                *(close + 3) = level;
+                
+                arena_push_cstring(arena, open);
+                arena_push_string(arena, node->text);
+                arena_push_cstring(arena, close);
+            } break;
+            
+            case Dom_Paragraph: {
+                arena_push_cstring(arena, "<p>\n");
+                push_generated_html_from_dom_node(arena, node->paragraph.first_node);
+                arena_push_cstring(arena, "<\\p>\n");
+            } break;
+            
+            case Dom_Inline_Text: {
+                if (node->text_style & TextStyle_Bold) {
+                    arena_push_cstring(arena, "<strong>");
+                }
+                if (node->text_style & TextStyle_Italics) {
+                    arena_push_cstring(arena, "<em>");
+                }
+                if (node->text_style & TextStyle_Code) {
+                    arena_push_cstring(arena, "<code>");
+                }
+                arena_push_string(arena, node->text);
+                if (node->text_style & TextStyle_Italics) {
+                    arena_push_cstring(arena, "</em>");
+                }
+                if (node->text_style & TextStyle_Bold) {
+                    arena_push_cstring(arena, "</strong>");
+                }
+                if (node->text_style & TextStyle_Code) {
+                    arena_push_cstring(arena, "</code>");
+                }
+            } break;
+        }
+        
+        node = node->next;
+    }
+}
+
+string
+generate_html_from_dom(Dom* dom) {
+    string result;
+    zero_struct(result);
+    
+    Memory_Arena html_buffer;
+    zero_struct(html_buffer);
+    
+    Dom_Node* node = dom->root;
+    push_generated_html_from_dom_node(&html_buffer, node);
+    
+    // Convert html buffer to string
+    Memory_Block_Header* header = (Memory_Block_Header*) html_buffer.base;
+    Memory_Block_Header* first_header = header;
+    while (header) {
+        first_header = header;
+        result.count += header->size_used - sizeof(Memory_Block_Header);
+        header = header->prev;
     }
     
-    char* filename = argv[1];
-    Dom file = read_markdown_file(filename);
+    if (result.count > 0) {
+        result.data = (char*) malloc(result.count + 1);
+        
+        char* dest = result.data;
+        
+        header = first_header;
+        while (header) {
+            size_t size = header->size_used - sizeof(Memory_Block_Header);
+            memcpy(dest, header + 1, size);
+            dest += size;
+            header = header->next;
+        }
+        
+        *dest = 0;
+    }
     
-    (void) file;
-    
-    return 0;
+    return result;
 }
 

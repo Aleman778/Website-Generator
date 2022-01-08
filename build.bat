@@ -15,6 +15,6 @@ rem Common Linker Flags
 set linker_flags=-incremental:no -opt:ref -OUT:generator.exe
 
 rem Compile
-cl %compiler_flags% ../generator.c -link %linker_flags%
+cl %compiler_flags% ../demo.c -link %linker_flags%
 
 popd
