@@ -92,8 +92,10 @@ is_whitespace_no_new_line(char c) {
 
 inline bool
 is_special_character(char c) {
-    return c == '*' 
-        || c == '#' 
+    return c == '*'
+        || c == '#'
+        || c == ':'
+        || c == '/'
         || c == '`'
         || c == '.'
         || c == '_'
@@ -163,6 +165,31 @@ peek_token(Tokenizer* t) {
     return t->peeked;
 }
 
+string
+parse_enclosed_string(Tokenizer* t, char open, char close) {
+    string result;
+    zero_struct(result);
+    
+    if (open != 0) {
+        Token token = peek_token(t);
+        if (token.symbol != open) {
+            return result;
+        }
+        next_token(t);
+    }
+    
+    Token token = next_token(t);
+    result.data = token.text.data;
+    result.count = 0;
+    
+    while (token.symbol != close) {
+        result.count += token.text.count;
+        token = next_token(t);
+    }
+    
+    return result;
+}
+
 typedef enum {
     CodeBlockLanguage_None,
     CodeBlockLanguage_C
@@ -223,7 +250,6 @@ struct Dom_Node {
         
         struct {
             string source;
-            string alternative;
         } image;
         
         struct {
@@ -420,6 +446,56 @@ parse_markdown_text_line(Tokenizer* t, Memory_Arena* arena, Token token)  {
             token = next_token(t);
             node->text.data = token.text.data;
             node->text.count = 0;
+        } else if (token.symbol == '[') {
+            string text = parse_enclosed_string(t, 0, ']');
+            string src = parse_enclosed_string(t, '(', ')');
+            
+            if (text.count > 0 && src.count > 0) {
+                node = arena_push_dom_node(arena, node);
+                node->type = Dom_Link;
+                node->text = text;
+                node->link.source = src;
+                
+                token = next_token(t);
+                node = arena_push_dom_node(arena, node);
+                node->type = Dom_Inline_Text;
+                node->text.data = token.text.data;
+                node->text.count = 0;
+                continue;
+            }
+        } else if (token.text.count >= 4) {
+            if (memcmp("http", token.text.data, 4) == 0) {
+                if (token.text.count == 4 || (token.text.count == 5 && token.text.data[4] == 's')) {
+                    Tokenizer temp_t = *t;
+                    next_token(&temp_t);
+                    bool success = next_token(&temp_t).symbol != ':';
+                    success &= next_token(&temp_t).symbol != '/';
+                    success &= next_token(&temp_t).symbol != '/';
+                    success &= !next_token(&temp_t).whitespace;
+                    
+                    if (success) {
+                        string link;
+                        link.data = token.text.data;
+                        link.count = 0;
+                        
+                        while (!token.whitespace) {
+                            link.count += token.text.count;
+                            token = next_token(t);
+                        }
+                        
+                        node = arena_push_dom_node(arena, node);
+                        node->type = Dom_Link;
+                        node->text = link;
+                        node->link.source = link;
+                        
+                        node = arena_push_dom_node(arena, node);
+                        node->type = Dom_Inline_Text;
+                        node->text.data = token.text.data;
+                        node->text.count = 0;
+                        continue;
+                    }
+                } 
+            }
         }
         
         node->text.count += token.text.count;
@@ -502,29 +578,6 @@ parse_markdown_list(Tokenizer* t, Memory_Arena* arena, Token line_start, int cur
     return result;
 }
 
-string
-parse_enclosed_string(Tokenizer* t, char open, char close) {
-    string result;
-    zero_struct(result);
-    
-    Token token = peek_token(t);
-    if (token.symbol != open) {
-        return result;
-    }
-    next_token(t);
-    
-    token = next_token(t);
-    result.data = token.text.data;
-    result.count = 0;
-    
-    while (token.symbol != close) {
-        result.count += token.text.count;
-        token = next_token(t);
-    }
-    
-    return result;
-}
-
 Dom_Node*
 parse_markdown_line(Tokenizer* t, Memory_Arena* arena) {
     Dom_Node* node = arena_push_struct(arena, Dom_Node);
@@ -579,9 +632,8 @@ parse_markdown_line(Tokenizer* t, Memory_Arena* arena) {
         if (src.count > 0 && alt.count > 0) {
             node->type = Dom_Image;
             node->image.source = src;
-            node->image.alternative = alt;
+            node->text = alt;
         }
-        
     } else {
         node->type = Dom_Paragraph;
         node->paragraph.first_node = parse_markdown_text_line(t, arena, token);
@@ -675,10 +727,19 @@ push_generated_html_from_dom_node(Memory_Arena* arena, Dom_Node* node, int depth
             
             case Dom_Image: {
                 arena_push_cstring(arena, "<img alt=\"");
-                arena_push_string(arena, node->image.alternative);
+                arena_push_string(arena, node->text);
                 arena_push_cstring(arena, "\" src=\"");
                 arena_push_string(arena, node->image.source);
                 arena_push_cstring(arena, "\" width=\"100%\"/>");
+                arena_push_new_line(arena, depth);
+            } break;
+            
+            case Dom_Link: {
+                arena_push_cstring(arena, "<a href=\"");
+                arena_push_string(arena, node->link.source);
+                arena_push_cstring(arena, "\">");
+                arena_push_string(arena, node->text);
+                arena_push_cstring(arena, "</a>");
                 arena_push_new_line(arena, depth);
             } break;
             

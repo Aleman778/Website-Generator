@@ -48,6 +48,6 @@ test *This is italic*, **this is bold** and `this is code`.
          
 ### Link
 You can just write the link in plain text https://github.com/Aleman778/aleman778.github.io,
-or use a [custom link](https://github.com/Aleman778/aleman778.github.io)
+or use a [custom link](https://github.com/Aleman778/aleman778.github.io).
                                 
                                 
