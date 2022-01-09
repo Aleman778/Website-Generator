@@ -177,6 +177,7 @@ typedef enum {
     Dom_Unordered_List,
     Dom_Ordered_List,
     Dom_List_Item,
+    Dom_Image,
     Dom_Link,
     Dom_Date,
     Dom_Code_Block,
@@ -219,6 +220,11 @@ struct Dom_Node {
         struct {
             Dom_Node* first_node;
         } list_item;
+        
+        struct {
+            string source;
+            string alternative;
+        } image;
         
         struct {
             string source;
@@ -440,9 +446,6 @@ parse_markdown_list(Tokenizer* t, Memory_Arena* arena, Token line_start, int cur
     for (;;) {
         Token token = peek_token(t);
         if (token.new_line) {
-            if (node->list_item.first_node) {
-                printf("\\n: %.*s\n", (int) node->list_item.first_node->text.count, node->list_item.first_node->text.data);
-            }
             break;
         }
         
@@ -460,9 +463,6 @@ parse_markdown_list(Tokenizer* t, Memory_Arena* arena, Token line_start, int cur
         // NOTE(Alexander): either symbol +, -, * (unordered is correct) or 1. 2. etc. (ordered is correct)
         bool correct_line_start = token.symbol == line_start.symbol 
             || (line_start.number > 0 && token.number == line_start.number);
-        if (node->list_item.first_node) {
-            printf("%.*s...\\n = %d\n", (int) node->list_item.first_node->text.count, node->list_item.first_node->text.data, correct_line_start);
-        }
         
         if (indent < curr_indent || !correct_line_start) {
             break;
@@ -497,6 +497,29 @@ parse_markdown_list(Tokenizer* t, Memory_Arena* arena, Token line_start, int cur
         node = arena_push_dom_node(arena, node);
         node->type = Dom_List_Item;
         node->list_item.first_node = parse_markdown_text_line(t, arena, next_token(t));
+    }
+    
+    return result;
+}
+
+string
+parse_enclosed_string(Tokenizer* t, char open, char close) {
+    string result;
+    zero_struct(result);
+    
+    Token token = peek_token(t);
+    if (token.symbol != open) {
+        return result;
+    }
+    next_token(t);
+    
+    token = next_token(t);
+    result.data = token.text.data;
+    result.count = 0;
+    
+    while (token.symbol != close) {
+        result.count += token.text.count;
+        token = next_token(t);
     }
     
     return result;
@@ -548,6 +571,16 @@ parse_markdown_line(Tokenizer* t, Memory_Arena* arena) {
         
     } else if (token.symbol == '`' && token.text.count == 3) {
         node->type = Dom_Code_Block;
+        
+    } else if (token.symbol == '!' && peek_token(t).symbol == '[') {
+        string alt = parse_enclosed_string(t, '[', ']');
+        string src = parse_enclosed_string(t, '(', ')');
+        
+        if (src.count > 0 && alt.count > 0) {
+            node->type = Dom_Image;
+            node->image.source = src;
+            node->image.alternative = alt;
+        }
         
     } else {
         node->type = Dom_Paragraph;
@@ -637,6 +670,15 @@ push_generated_html_from_dom_node(Memory_Arena* arena, Dom_Node* node, int depth
                 arena_push_new_line(arena, depth + 2);
                 push_generated_html_from_dom_node(arena, node->list_item.first_node, depth + 2);
                 arena_push_cstring(arena, "</li>");
+                arena_push_new_line(arena, depth);
+            } break;
+            
+            case Dom_Image: {
+                arena_push_cstring(arena, "<img alt=\"");
+                arena_push_string(arena, node->image.alternative);
+                arena_push_cstring(arena, "\" src=\"");
+                arena_push_string(arena, node->image.source);
+                arena_push_cstring(arena, "\" width=\"100%\"/>");
                 arena_push_new_line(arena, depth);
             } break;
             
