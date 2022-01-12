@@ -46,8 +46,6 @@ test *This is italic*, **this is bold** and `this is code`.
 ### Image
 ![Image](https://upload.wikimedia.org/wikipedia/commons/thumb/7/70/Inadvertent_greeking_in_The_Straits_Times_%2826_April_2014%29%2C_Singapore_-_20140428.jpg/1920px-Inadvertent_greeking_in_The_Straits_Times_%2826_April_2014%29%2C_Singapore_-_20140428.jpg)
          
-### Link
-You can just write the link in plain text https://github.com/Aleman778/aleman778.github.io,
-or use a [custom link](https://github.com/Aleman778/aleman778.github.io).
-                                
-                                
+### Linkä
+You can just write the link in plain text https://github.com/Aleman778/aleman778.github.io, 
+or use a [custom link](https://github.com/Aleman778/aleman778.github.io).                                

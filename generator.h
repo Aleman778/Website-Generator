@@ -1,3 +1,6 @@
+#ifndef GENERATOR_H
+#define GENERATOR_H
+
 #include "stdio.h"
 #include "stdlib.h"
 
@@ -13,14 +16,17 @@ typedef struct {
     size_t count;
 } string;
 
-typedef struct {
-    char* contents;
-    size_t size;
-} Read_File_Result;
+inline string
+string_lit(const char* lit) {
+    string result;
+    result.data = (char*) lit;
+    result.count = strlen(lit);
+    return result;
+}
 
-Read_File_Result
+string
 read_entire_file(const char* filepath) {
-    Read_File_Result result;
+    string result;
     zero_struct(result);
     
     FILE* file;
@@ -35,9 +41,9 @@ read_entire_file(const char* filepath) {
     fseek(file, 0, SEEK_SET);
     
     
-    result.contents = malloc(file_size);
-    result.size = file_size;
-    fread(result.contents, result.size, 1, file);
+    result.data = malloc(file_size);
+    result.count = file_size;
+    fread(result.data, result.count, 1, file);
     fclose(file);
     return result;
 }
@@ -94,10 +100,12 @@ inline bool
 is_special_character(char c) {
     return c == '*'
         || c == '#'
+        || c == '$'
         || c == ':'
         || c == '/'
         || c == '`'
         || c == '.'
+        || c == ','
         || c == '_'
         || c == '+'
         || c == '-'
@@ -125,6 +133,11 @@ next_token(Tokenizer* t) {
     result.number = -1;
     result.symbol = *t->curr;
     result.text.data = t->curr;
+    
+    if (t->curr == t->end) {
+        result.symbol = 0;
+        return result;
+    }
     
     char c = *t->curr++;
     if (is_special_character(c)) {
@@ -272,6 +285,51 @@ typedef struct {
     Dom_Node* root;
 } Dom;
 
+typedef struct {
+    char* data;
+    size_t size;
+    size_t curr_used;
+} String_Builder;
+
+inline void
+string_builder_alloc(String_Builder* builder, size_t new_size) {
+    void* new_data = realloc(builder->data, new_size);
+    if (!new_data) {
+        printf("TODO: handle when we can't realloc\n");
+    }
+    builder->data = new_data;
+    builder->size = new_size;
+}
+
+void
+string_builder_push(String_Builder* builder, string str) {
+    size_t required_size = str.count + builder->curr_used;
+    if (required_size > builder->size) {
+        size_t new_size = max(builder->size * 2, required_size);
+        string_builder_alloc(builder, new_size);
+    }
+    
+    memcpy(builder->data + builder->curr_used, str.data, str.count);
+    builder->curr_used += str.count;
+}
+
+string
+string_builder_to_string(String_Builder* builder) {
+    string result;
+    result.data = malloc(builder->curr_used + 1);
+    result.count = builder->curr_used;
+    memcpy(result.data, builder->data, builder->curr_used);
+    result.data[result.count] = 0;
+    return result;
+}
+
+string
+string_builder_to_string_nocopy(String_Builder* builder) {
+    string result;
+    result.data = builder->data;
+    result.count = builder->curr_used;
+    return result;
+}
 
 typedef struct Memory_Block_Header Memory_Block_Header;
 struct Memory_Block_Header {
@@ -478,7 +536,12 @@ parse_markdown_text_line(Tokenizer* t, Memory_Arena* arena, Token token)  {
                         link.data = token.text.data;
                         link.count = 0;
                         
+                        // NOTE(Alexander): not complete parser for URLs, they are way to complicated
                         while (!token.whitespace) {
+                            if ((token.symbol == ',' || token.symbol == '.') && peek_token(t).whitespace) {
+                                break;
+                            }
+                            
                             link.count += token.text.count;
                             token = next_token(t);
                         }
@@ -647,12 +710,14 @@ read_markdown_file(const char* filename) {
     Dom result;
     zero_struct(result);
     
-    Read_File_Result file = read_entire_file(filename);
+    string source = read_entire_file(filename);
     Tokenizer tokenizer;
+    zero_struct(tokenizer);
+    
     Tokenizer* t = &tokenizer;
-    t->base = file.contents;
+    t->base = source.data;
     t->curr = t->base;
-    t->end = t->curr + file.size;
+    t->end = t->curr + source.count;
     
     // Allocate memory block to store the DOM in
     
@@ -687,42 +752,38 @@ push_generated_html_from_dom_node(Memory_Arena* arena, Dom_Node* node, int depth
                 *(open + 2) = level;
                 *(close + 3) = level;
                 
+                arena_push_new_line(arena, depth);
                 arena_push_cstring(arena, open);
                 arena_push_string(arena, node->text);
                 arena_push_cstring(arena, close);
-                arena_push_new_line(arena, depth);
             } break;
             
             case Dom_Paragraph: {
+                arena_push_new_line(arena, depth);
                 arena_push_cstring(arena, "<p>");
-                arena_push_new_line(arena, depth + 2);
                 push_generated_html_from_dom_node(arena, node->paragraph.first_node, depth + 2);
                 arena_push_cstring(arena, "</p>");
-                arena_push_new_line(arena, depth);
             } break;
             
             case Dom_Unordered_List: {
+                arena_push_new_line(arena, depth);
                 arena_push_cstring(arena, "<ul>");
-                arena_push_new_line(arena, depth + 2);
                 push_generated_html_from_dom_node(arena, node->unordered_list.first_item, depth + 2);
                 arena_push_cstring(arena, "</ul>");
-                arena_push_new_line(arena, depth);
             } break;
             
             case Dom_Ordered_List: {
+                arena_push_new_line(arena, depth);
                 arena_push_cstring(arena, "<ol>");
-                arena_push_new_line(arena, depth + 2);
                 push_generated_html_from_dom_node(arena, node->unordered_list.first_item, depth + 2);
                 arena_push_cstring(arena, "</ol>");
-                arena_push_new_line(arena, depth);
             } break;
             
             case Dom_List_Item: {
+                arena_push_new_line(arena, depth);
                 arena_push_cstring(arena, "<li>");
-                arena_push_new_line(arena, depth + 2);
                 push_generated_html_from_dom_node(arena, node->list_item.first_node, depth + 2);
                 arena_push_cstring(arena, "</li>");
-                arena_push_new_line(arena, depth);
             } break;
             
             case Dom_Image: {
@@ -731,7 +792,6 @@ push_generated_html_from_dom_node(Memory_Arena* arena, Dom_Node* node, int depth
                 arena_push_cstring(arena, "\" src=\"");
                 arena_push_string(arena, node->image.source);
                 arena_push_cstring(arena, "\" width=\"100%\"/>");
-                arena_push_new_line(arena, depth);
             } break;
             
             case Dom_Link: {
@@ -745,7 +805,6 @@ push_generated_html_from_dom_node(Memory_Arena* arena, Dom_Node* node, int depth
             
             case Dom_Line_Break: {
                 arena_push_cstring(arena, "<br>");
-                arena_push_new_line(arena, depth);
             } break;
             
             case Dom_Inline_Text: {
@@ -776,18 +835,11 @@ push_generated_html_from_dom_node(Memory_Arena* arena, Dom_Node* node, int depth
 }
 
 string
-generate_html_from_dom(Dom* dom) {
+convert_memory_arena_to_string(Memory_Arena* arena) {
     string result;
     zero_struct(result);
     
-    Memory_Arena html_buffer;
-    zero_struct(html_buffer);
-    
-    Dom_Node* node = dom->root;
-    push_generated_html_from_dom_node(&html_buffer, node, 0);
-    
-    // Convert html buffer to string
-    Memory_Block_Header* header = (Memory_Block_Header*) html_buffer.base;
+    Memory_Block_Header* header = (Memory_Block_Header*) arena->base;
     Memory_Block_Header* first_header = header;
     while (header) {
         first_header = header;
@@ -813,3 +865,55 @@ generate_html_from_dom(Dom* dom) {
     
     return result;
 }
+
+string
+generate_html_from_dom(Dom* dom) {
+    Memory_Arena html_buffer;
+    zero_struct(html_buffer);
+    
+    Dom_Node* node = dom->root;
+    push_generated_html_from_dom_node(&html_buffer, node, 0);
+    string result = convert_memory_arena_to_string(&html_buffer);
+    return result;
+}
+
+string
+template_process_string(string source, int argc, string* args) {
+    Tokenizer tokenizer;
+    zero_struct(tokenizer);
+    
+    Tokenizer* t = &tokenizer;
+    t->base = source.data;
+    t->curr = t->base;
+    t->end = t->curr + source.count;
+    
+    String_Builder string_builder;
+    zero_struct(string_builder);
+    String_Builder* sb = &string_builder;
+    string_builder_alloc(sb, source.count);
+    
+    Token token = next_token(t);
+    while (token.symbol) {
+        if (token.symbol == '$' && token.text.count == 1) {
+            
+            token = peek_token(t);
+            if (token.symbol == '{' && token.text.count == 1) {
+                next_token(t);
+                token = next_token(t);
+                if (token.number >= 0 && token.number < argc) {
+                    string_builder_push(sb, args[token.number]);
+                    next_token(t);
+                }
+            }
+        }
+        
+        string_builder_push(sb, token.text);
+        token = next_token(t);
+    }
+    
+    string result = string_builder_to_string(sb);
+    return result;
+}
+
+
+#endif //GENERATOR_H
