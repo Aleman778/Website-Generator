@@ -4,6 +4,7 @@ It's a simple static site generator which can be included to provide an function
 from running that is the [generated.html](https://github.com/Aleman778/website_generator/blob/main/generated.html).
 
 ## Features
+- Basic IO reading and writing entire file
 - Markdown parsing, generated in to DOM structure
 - Generating HTML from DOM structure
 - Single string template system
