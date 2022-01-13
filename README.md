@@ -12,6 +12,10 @@ from running that is the [generated.html](https://github.com/Aleman778/website_g
 ## Usage (WIP)
 Main functions
 ```C
+string read_entire_file(const char* filepath);
+
+bool write_entire_file(const char* filepath, string contents);
+    
 Dom read_markdown_file(const char* filename);
 
 string generate_html_from_dom(Dom* dom);
