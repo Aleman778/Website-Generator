@@ -1,6 +1,6 @@
 # [generator.h](https://github.com/Aleman778/website_generator/blob/main/generator.h)
                 
-It's a simple static site generator which can be included to provide an functions for generating static sites. For an example see the [demo.c](https://github.com/Aleman778/website_generator/blob/main/demo.c) file. And the result
+Is a simple API for creating static site generators, and is shipped in a single C header file that can easily be included in your project. This repository includes a very simple demo, for an example implementation see the [demo.c](https://github.com/Aleman778/website_generator/blob/main/demo.c) file. And the result
 from running that is the [generated.html](https://github.com/Aleman778/website_generator/blob/main/generated.html).
 
 ## Features
