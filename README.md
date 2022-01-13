@@ -6,7 +6,7 @@ Is a simple API for creating static site generators, and is shipped in a single 
 - Basic IO reading and writing entire file
 - Markdown parsing, generated in to DOM structure
 - Generating HTML from DOM structure
-- Single string template system
+- Basic string template system
 - More to come...
 
 ## Usage (WIP)
