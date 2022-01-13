@@ -9,6 +9,13 @@ from running that is the [generated.html](https://github.com/Aleman778/website_g
 - Single string template system
 - More to come...
 
-## Usage
-TODO
-                
+## Usage (WIP)
+Main functions
+```C
+Dom read_markdown_file(const char* filename);
+
+string generate_html_from_dom(Dom* dom);
+
+string template_process_string(string source, int argc, string* args);
+```
+  
